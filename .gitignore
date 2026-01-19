@@ -1,0 +1,27 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+terraform.tfvars
+
+
+# Terraform build artifacts
+lambda_function.zip
+out.json
+output.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+
+# OS / Editor
+.DS_Store
+.vscode/
+.idea/
+
+
+# Logs (if any added later)
+*.log
