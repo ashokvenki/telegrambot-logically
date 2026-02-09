@@ -4,7 +4,32 @@ import boto3
 import uuid
 import requests
 import re
+import logging
+import traceback
 from datetime import datetime
+
+# ---------------- LOGGING ----------------
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def log_event(level, request_id=None, user_id=None, command=None, outcome=None, error=None):
+    log_entry = {
+        "level": level,
+        "timestamp": datetime.utcnow().isoformat(),
+        "request_id": request_id,
+        "user_id": user_id,
+        "command": command,
+        "outcome": outcome,
+        "error": error
+    }
+
+    # CloudWatch IMPORTANT: must be JSON text
+    message = json.dumps(log_entry)
+
+    if level == "ERROR":
+        logger.error(message)
+    else:
+        logger.info(message)
 
 # ---------------- ENV ----------------
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -27,7 +52,6 @@ KNOWLEDGE = {
     "who made you": "I was built by Ashu as part of a cloud computing project 😊"
 }
 
-# ---------------- GUIDED SESSIONS ----------------
 GUIDED_SESSIONS = {}
 
 # ---------------- HELPERS ----------------
@@ -71,11 +95,7 @@ def start_guided_equation(chat_id, equation):
 
     GUIDED_SESSIONS[chat_id] = {"a": a, "b": b, "c": c, "step": 1}
 
-    send_message(
-        chat_id,
-        f"Let’s solve this step by step 😊\n\n"
-        f"First, subtract {b} from both sides.\nWhat do you get?"
-    )
+    send_message(chat_id, f"First subtract {b} from both sides. What do you get? 😊")
 
 def continue_guided(chat_id):
     session = GUIDED_SESSIONS.get(chat_id)
@@ -84,12 +104,12 @@ def continue_guided(chat_id):
 
     if session["step"] == 1:
         session["step"] = 2
-        send_message(chat_id, f"Nice 👍 Now divide both sides by {session['a']}.\nWhat is x?")
+        send_message(chat_id, f"Now divide both sides by {session['a']}. What is x?")
         return True
 
     if session["step"] == 2:
         x_val = (session["c"] - session["b"]) / session["a"]
-        send_message(chat_id, f"Great job 🎉\n\nx = {x_val}")
+        send_message(chat_id, f"Great job 🎉 x = {x_val}")
         GUIDED_SESSIONS.pop(chat_id)
         return True
 
@@ -99,85 +119,70 @@ def continue_guided(chat_id):
 def handle_command(text, chat_id, user_id, first_name):
     cmd = normalize(text)
 
-    # Continue guided solving
+    if cmd == "crash":
+        raise Exception("Intentional test error for CloudWatch alarm")
+
     if continue_guided(chat_id):
         return
 
-    # Greetings
     if cmd in ["hello", "hi", "hey"]:
         send_message(chat_id, f"Hey {first_name}! 😊 How can I help today?")
         return
 
-    # Help
     if cmd == "help":
-        send_message(
-            chat_id,
-            "Here’s what I can help you with 😊\n\n"
-            "• Say hello\n"
-            "• Save notes: save your note\n"
-            "• List notes: list\n"
-            "• Upload files or photos\n"
-            "• Ask: what is cloud computing\n"
+        send_message(chat_id,
+            "Here’s what I can help you with 😊\n"
+            "• save <note>\n"
+            "• list\n"
+            "• ask questions\n"
             "• Solve math: solve 12 + 8\n"
-            "• Guided math: help me solve 2x + 4 = 10"
+            "• Upload files/photos\n"
+            "• type crash to test monitoring 😄"
         )
         return
 
-    # Math solver
     if cmd.startswith("solve "):
         result = solve_basic_math(cmd.replace("solve ", "", 1))
         if result:
             send_message(chat_id, result)
             return
 
-    # Percentage solver
     percent_result = solve_percentage(cmd)
     if percent_result:
         send_message(chat_id, percent_result)
         return
 
-    # Guided solver
     if cmd.startswith("help me solve"):
         equation = cmd.replace("help me solve", "").strip()
         start_guided_equation(chat_id, equation)
         return
 
-    # Save note
     if cmd.startswith("save "):
         note = cmd.replace("save ", "", 1)
-        table.put_item(
-            Item={
-                "user_id": str(user_id),
-                "note_id": str(uuid.uuid4()),
-                "note": note,
-                "created_at": datetime.utcnow().isoformat()
-            }
-        )
-        send_message(chat_id, "Got it 👍 I’ve saved that for you.")
+        table.put_item(Item={
+            "user_id": str(user_id),
+            "note_id": str(uuid.uuid4()),
+            "note": note,
+            "created_at": datetime.utcnow().isoformat()
+        })
+        send_message(chat_id, "Saved! 📝")
         return
 
-    # List notes
     if cmd == "list":
         resp = table.scan()
         notes = [i["note"] for i in resp.get("Items", []) if i["user_id"] == str(user_id)]
         if not notes:
-            send_message(chat_id, "I don’t remember anything yet.")
+            send_message(chat_id, "No notes yet.")
         else:
-            send_message(chat_id, "Here’s what I remember:\n" + "\n".join(f"• {n}" for n in notes))
+            send_message(chat_id, "\n".join(f"• {n}" for n in notes))
         return
 
-    # Knowledge matching (FIXED)
     for key, answer in KNOWLEDGE.items():
         if key in cmd:
             send_message(chat_id, answer)
             return
 
-    # Fallback
-    send_message(
-        chat_id,
-        "Hmm 🤔 I’m not sure about that.\n"
-        "You can say `help` to see what I can do."
-    )
+    send_message(chat_id, "I didn't understand that. Type help 😊")
 
 # ---------------- FILE HANDLER ----------------
 def handle_file(message, chat_id, user_id):
@@ -197,29 +202,35 @@ def handle_file(message, chat_id, user_id):
     ).content
 
     s3.put_object(Bucket=BUCKET_NAME, Key=f"{user_id}/{file_name}", Body=file_data)
-    send_message(chat_id, "Nice 😊 I’ve saved your file safely.")
+    send_message(chat_id, "File saved 😊")
 
 # ---------------- LAMBDA ENTRY ----------------
 def lambda_handler(event, context):
+
     try:
         body = json.loads(event.get("body", "{}"))
-        message = body.get("message")
 
-        if not message:
-            return {"statusCode": 200, "body": "OK"}
+        if "message" not in body:
+            return {"statusCode": 200, "body": "no message"}
 
+        message = body["message"]
         chat_id = message["chat"]["id"]
-        user = message["from"]
-        user_id = user["id"]
+
+        user = message.get("from", {})
+        user_id = user.get("id", "unknown")
         first_name = user.get("first_name", "there")
 
-        if "text" in message:
-            handle_command(message["text"], chat_id, user_id, first_name)
-        else:
-            handle_file(message, chat_id, user_id)
+        text = message.get("text", "").lower().strip()
+        request_id = context.aws_request_id
 
-        return {"statusCode": 200, "body": "OK"}
+        handle_command(text, chat_id, user_id, first_name)
+
+        log_event("INFO", request_id, user_id, text, "success")
+
+        return {"statusCode": 200, "body": "ok"}
 
     except Exception as e:
-        print("Error:", e)
-        return {"statusCode": 500, "body": "Error"}
+        print(traceback.format_exc())
+        log_event("ERROR", context.aws_request_id, user_id if 'user_id' in locals() else "unknown",
+                  text if 'text' in locals() else "unknown", "failure", str(e))
+        return {"statusCode": 200, "body": "error handled"}
