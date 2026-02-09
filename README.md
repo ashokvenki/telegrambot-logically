@@ -117,7 +117,83 @@ curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" -d "url=$(terrafor
 ```
 
 ---
+## Observability (CloudWatch Monitoring)
 
+Production systems must be monitored. We implemented full observability.
+
+### Structured Logging
+
+Every request logs a JSON entry:
+
+Fields: - level (INFO/ERROR) - timestamp - request_id - user_id -
+command - outcome (success/failure) - error message - stack trace on
+failure
+
+This allows debugging real users.
+
+### Log Management
+
+Terraform creates:
+
+    /aws/lambda/telegram-bot
+
+Retention:
+
+    14 days
+
+Logs are automatically deleted afterward (best practice).
+
+### Error Detection
+
+A CloudWatch **metric filter** scans logs: Pattern:
+
+    ERROR
+
+### Alarm
+
+CloudWatch Alarm triggers when:
+
+    ≥ 1 error within 5 minutes
+
+This simulates real production monitoring where developers are alerted
+if the system fails.
+
+------------------------------------------------------------------------
+
+## How to View Logs
+
+CLI:
+
+``` bash
+aws logs tail /aws/lambda/telegram-bot --follow --region us-east-1
+```
+
+AWS Console: CloudWatch → Log Groups → /aws/lambda/telegram-bot
+
+------------------------------------------------------------------------
+
+## Why This Matters
+
+This project demonstrates: - Serverless application design -
+Infrastructure as Code - Secure IAM practices - Persistent storage -
+Monitoring and alerting - Real production debugging workflow
+
+It is essentially a small‑scale production cloud application.
+
+------------------------------------------------------------------------
+
+## Troubleshooting
+
+Bot not replying: 1. Check webhook 2. Check Lambda logs 3. Look for
+ERROR entries 4. Verify API Gateway URL
+
+Webhook check:
+
+``` bash
+curl https://api.telegram.org/bot<TOKEN>/getWebhookInfo
+```
+
+------------------------------------------------------------------------
 ## Summary
 
 This project demonstrates modular Terraform, remote state, IAM best practices, and safe refactoring under AWS Academy constraints.
